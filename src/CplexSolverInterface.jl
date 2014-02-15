@@ -5,6 +5,7 @@ type CplexMathProgModel <: AbstractMathProgModel
   lazycb
   cutcb
   heuristiccb
+  branchcb
 end
 
 function CplexMathProgModel(;options...)
@@ -126,6 +127,9 @@ function optimize!(m::CplexMathProgModel)
     if m.heuristiccb != nothing
       setmathprogheuristiccallback!(m)
     end
+    if m.branchcb != nothing
+      setmathprogbranchcallback!(m)
+    end
     optimize!(m.inner)
 end
 
@@ -178,13 +182,13 @@ type CplexCallbackData <: MathProgCallbackData
   cbdata::CallbackData
   state::Symbol
   where::Cint
-  # model::CplexMathProgModel # not needed?
 end
 
 # set to nothing to clear callback
 setlazycallback!(m::CplexMathProgModel,f) = (m.lazycb = f)
 setcutcallback!(m::CplexMathProgModel,f) = (m.cutcb = f)
 setheuristiccallback!(m::CplexMathProgModel,f) = (m.heuristiccb = f)
+setbranchcallback!(m::CplexMathProgModel,f) = (m.branchcb = f)
 
 function cbgetmipsolution(d::CplexCallbackData)
     @assert d.state == :MIPSol
@@ -231,13 +235,23 @@ cbaddsolution!(d::CplexCallbackData, x) = cbsolution(d.stat, x)
 const sensemap = ['=' => 'E', '<' => 'L', '>' => 'G']
 function cbaddcut!(d::CplexCallbackData,varidx,varcoef,sense,rhs)
     @assert d.state == :MIPNode
-    cbcut(d.cbdata, convert(Vector{Cint}, varidx), float(varcoef), sensemap[sense], float(rhs))
+    cbcut(d.cbdata, d.where, convert(Vector{Cint}, varidx), float(varcoef), sensemap[sense], float(rhs))
 end
 
 function cbaddlazy!(d::CplexCallbackData,varidx,varcoef,sense,rhs)
     @assert d.state == :MIPNode || d.state == :MIPSol
     cblazy(d.cbdata, d.where, convert(Vector{Cint}, varidx), float(varcoef), sensemap[sense], float(rhs))
 end
+
+# function cbaddsolution!(d::CplexCallbackData,x)
+#     @assert d.state == :MIPNode
+#     cbsolution(d.state, x)
+# end
+
+# function cbaddbranch!(d::CplexCallbackData,varidx,varcoef,sense,rhs)
+#     @assert d.state == :MIPBranch
+#     cbbranch(d.cbdata, d.where, convert(Vector{Cint}, varidx), float(varcoef), sensemap[sense], float(rhs))
+# end
 
 # breaking abstraction, define our low-level callback to eliminate
 # a level of indirection
@@ -262,8 +276,36 @@ function mastercallback(env::Ptr{Void}, cbdata::Ptr{Void}, where::Cint, userdata
                 return convert(Cint, 1006)
             end
         end
+    elseif where == CPX_CALLBACK_MIP_HEURISTIC
+        state = :MIPNode
+        cpxcb = CplexCallbackData(cpxrawcb, state, where)    
         if model.heuristiccb != nothing
             stat = model.heuristiccb(cpxcb)
+            if stat == :Exit
+                return convert(Cint, 1006)
+            end
+        end    
+    elseif where == CPX_CALLBACK_MIP_BRANCH
+        state = :MIPBranch
+        cpxcb = CplexCallbackData(cpxrawcb, state, where)
+        if model.branchcb != nothing
+            stat = model.branchcb(cpxcb)
+            if stat == :Exit
+                return convert(Cint, 1006)
+            end
+        end
+    end
+    return convert(Cint, 0)
+end
+
+function branchcallback(env::Ptr{Void}, cbdata::Ptr{Void}, wherefrom::Cint, userdata::Ptr{Void}, typ::Cint, sos::Cint, nodecnt::Cint, bdcnt::Cint, nodeest::Ptr{Cdouble}, nodebeg::Ptr{Cint}, indices::Ptr{Cint}, lu::Ptr{Cchar}, bd::Ptr{Cint}, userinteraction_p::Ptr{Cint})
+    model = unsafe_pointer_to_objref(userdata)::CplexMathProgModel
+    cpxrawcb = CallbackData(cbdata, model.inner)
+    if wherefrom == CPX_CALLBACK_MIP_BRANCH
+        state = :MIPBranch
+        cpxcb = CplexCallbackData(cpxrawcb, state, where)
+        if model.branchcb != nothing
+            stat = model.branchcb(cpxcb)
             if stat == :Exit
                 return convert(Cint, 1006)
             end
@@ -281,7 +323,7 @@ function setmathproglazycallback!(model::CplexMathProgModel)
     stat = @cpx_ccall(setlazyconstraintcallbackfunc, Cint, (
                       Ptr{Void}, 
                       Ptr{Void},
-                      Any,
+                      Any
                       ), 
                       model.inner.env, cpxcallback, model)
     if stat != 0
@@ -295,7 +337,7 @@ function setmathprogcutcallback!(model::CplexMathProgModel)
     stat = @cpx_ccall(setusercutcallbackfunc, Cint, (
                       Ptr{Void}, 
                       Ptr{Void},
-                      Any,
+                      Any
                       ), 
                       model.inner.env, cpxcallback, model)
     if stat != 0
@@ -309,8 +351,22 @@ function setmathprogheuristiccallback!(model::CplexMathProgModel)
     stat = @cpx_ccall(setheuristiccallbackfunc, Cint, (
                       Ptr{Void}, 
                       Ptr{Void},
-                      Any,
+                      Any
                       ), 
+                      model.inner.env, cpxcallback, model)
+    if stat != 0
+        throw(CplexError(model.env, stat))
+    end
+    nothing
+end
+
+function setmathprogbranchcallback!(model::CplexMathProgModel)
+    cpxcallback = cfunction(branchcallback, Cint, (Ptr{Void},Ptr{Void},Cint,Ptr{Void},Cint,Cint,Cint,Cint,Ptr{Cdouble},Ptr{Cint},Ptr{Cint},Ptr{Cchar},Ptr{Cint},Ptr{Cint}))
+    stat = @cpx_ccall(setbranchcallbackfunc, Cint, (
+                      Ptr{Void},
+                      Ptr{Void},
+                      Any
+                      ),
                       model.inner.env, cpxcallback, model)
     if stat != 0
         throw(CplexError(model.env, stat))
