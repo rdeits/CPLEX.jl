@@ -565,6 +565,8 @@ function cbgetlpsolution(d::CplexHeuristicCallbackData, sol::Vector{Cdouble})
     copy!(sol,d.sol)
 end
 
+const HEURTIME = Float64[0.0]
+
 function masterheuristiccallback(env::Ptr{Void},
                                  cbdata::Ptr{Void},
                                  wherefrom::Cint,
@@ -573,6 +575,7 @@ function masterheuristiccallback(env::Ptr{Void},
                                  xx::Ptr{Cdouble},
                                  isfeas_p::Ptr{Cint},
                                  userinteraction_p::Ptr{Cint})
+    t = time()
     model = unsafe_pointer_to_objref(userdata)::CplexMathProgModel
     cpxrawcb = CallbackData(cbdata, model.inner)
     if wherefrom == CPX_CALLBACK_MIP_HEURISTIC
@@ -608,6 +611,7 @@ function masterheuristiccallback(env::Ptr{Void},
             fill!(model.heuristic_buffer, NaN)
         end
     end
+    HEURTIME[1] += time() - t
     return convert(Cint, 0)
 end
 
