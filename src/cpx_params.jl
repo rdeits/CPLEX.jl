@@ -1,7 +1,7 @@
 # const CPX_INFBOUND = 1e20
 # const CPX_STR_PARAM_MAX = 512
 
-function get_param_type(env::Env, indx::Int)
+function get_param_type(env::Env, indx::Integer)
   ptype = Vector{Cint}(1)
   stat = @cpx_ccall(getparamtype, Cint, (
                     Ptr{Void},
@@ -31,7 +31,7 @@ end
 
 get_param_type(env::Env, name::String) = get_param_type(env, paramName2Indx[name])
 
-function set_param!(env::Env, _pindx::Int, val, ptype::Symbol)
+function set_param!(env::Env, _pindx::Integer, val, ptype::Symbol)
   pindx = convert(Cint, _pindx)
   if ptype == :Int
     stat = @cpx_ccall(setintparam, Cint, (Ptr{Void}, Cint, Cint), env.ptr, pindx, convert(Cint,val))
@@ -51,9 +51,11 @@ function set_param!(env::Env, _pindx::Int, val, ptype::Symbol)
   end
 end
 
-set_param!(env::Env, pindx::Int, val) = set_param!(env, pindx, val, get_param_type(env, pindx))
+set_param!(env::Env, pindx::Integer, val) = set_param!(env, pindx, val, get_param_type(env, pindx))
 
 set_param!(env::Env, pname::String, val) = set_param!(env, paramName2Indx[pname], val)
+
+set_param!(env::Env, pname::Symbol, val) = set_param!(env, string(pname), val)
 
 # set_params!(env::Env, args...)
 #   for (name, v) in args
@@ -61,7 +63,7 @@ set_param!(env::Env, pname::String, val) = set_param!(env, paramName2Indx[pname]
 #   end
 # end
 
-function get_param(env::Env, pindx::Int, ptype::Symbol)
+function get_param(env::Env, pindx::Integer, ptype::Symbol)
   if ptype == :Int
     val_int = Vector{Cint}(1)
     stat = @cpx_ccall(getintparam, Cint, (Ptr{Void}, Cint, Ptr{Cint}), env.ptr, convert(Cint,pindx), val_int)
@@ -98,7 +100,7 @@ function get_param(env::Env, pindx::Int, ptype::Symbol)
   nothing
 end
 
-get_param(env::Env, pindx::Int) = get_param(env, pindx, get_param_type(env, pindx))
+get_param(env::Env, pindx::Integer) = get_param(env, pindx, get_param_type(env, pindx))
 
 get_param(env::Env, pname::String) = get_param(env, paramName2Indx[pname])
 
